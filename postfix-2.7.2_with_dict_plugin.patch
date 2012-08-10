@@ -1,0 +1,363 @@
+diff -rupN postfix-2.7.2/makedefs postfix-2.7.2_with_dict_plugin/makedefs
+--- postfix-2.7.2/makedefs	2010-06-03 09:00:02.000000000 -0400
++++ postfix-2.7.2_with_dict_plugin/makedefs	2011-01-16 00:43:45.000000000 -0500
+@@ -626,7 +626,7 @@ SYSTYPE	= $SYSTYPE
+ AR	= $AR
+ ARFL	= $ARFL
+ RANLIB	= $RANLIB
+-SYSLIBS	= $AUXLIBS $SYSLIBS
++SYSLIBS	= $AUXLIBS $SYSLIBS -ldl
+ CC	= $CC $CCARGS
+ OPT	= $OPT
+ DEBUG	= $DEBUG
+diff -rupN postfix-2.7.2/src/global/dict_plugin.c postfix-2.7.2_with_dict_plugin/src/global/dict_plugin.c
+--- postfix-2.7.2/src/global/dict_plugin.c	1969-12-31 19:00:00.000000000 -0500
++++ postfix-2.7.2_with_dict_plugin/src/global/dict_plugin.c	2011-01-16 00:47:35.000000000 -0500
+@@ -0,0 +1,246 @@
++/*++
++/* NAME
++/*	dict_plugin 3
++/* SUMMARY
++/*	dictionary manager interface to plugin
++/* SYNOPSIS
++/*	#include <dict_plugin.h>
++/*
++/*	DICT	*dict_plugin_open(name, open_flags, dict_flags)
++/*	const char *name;
++/*	int	open_flags;
++/*	int	dict_flags;
++/* DESCRIPTION
++/*  dict_plugin_open() implements a plugin dictionary that returns 
++/*  
++/* .PP
++/* SEE ALSO
++/*	dict(3) generic dictionary manager
++/* AUTHOR(S)
++/*  
++/*	jianping liu
++/*	liujianping.china@gmail.com
++/*	
++/*--*/
++
++/* System library. */
++#include "sys_defs.h"
++#include <stdio.h>			/* sprintf() prototype */
++#include <stdlib.h>
++#include <unistd.h>
++#include <string.h>
++#include <dlfcn.h>		/* dlopen dlclose dlsym dlerror prototype */
++
++/* Utility library. */
++#include "dict.h"
++#include "msg.h"
++#include "mymalloc.h"
++
++/* Global library. */
++#include "cfg_parser.h"
++
++/* Application-specific. */
++#include "dict_plugin.h"
++
++typedef struct {
++  DICT    dict;
++  CFG_PARSER *parser;
++  char		*plugin_name;
++  char		*plugin_fn_open;
++  char		*plugin_fn_open_arg;
++  char		*plugin_fn_close;
++  char		*plugin_fn_lookup;
++  char		*plugin_fn_update;
++  char		*plugin_fn_delete;
++  char		*plugin_fn_sequence;
++  void		*plugin;
++  void    *plugin_resource;
++  void*		(*function_open)(const char*);
++  void		(*function_close)(void*);
++  const char *(*function_lookup) (void*, const char *);
++  int     (*function_update) (void*, const char *, const char *);
++  int     (*function_delete) (void*, const char *);
++  int     (*function_sequence) (void*, int, const char **, const char **);
++} DICT_PLUGIN;
++
++
++static const char *dict_plugin_lookup(struct DICT *dict, const char * key)
++{
++	const char* myname = "dict_plugin_lookup";
++	DICT_PLUGIN *dict_plugin = (DICT_PLUGIN *) dict;
++	if(!dict_plugin->function_lookup)
++		msg_fatal("%s: plugin lookup function is zero!\n", myname);
++	
++	return dict_plugin->function_lookup(dict_plugin->plugin_resource, key);
++}
++
++static void dict_plugin_update(struct DICT *dict, const char * key, const char * value)
++{
++	const char* myname = "dict_plugin_update";
++	DICT_PLUGIN *dict_plugin = (DICT_PLUGIN *) dict;
++
++	if(!dict_plugin->function_update)
++		msg_fatal("%s: plugin update function is zero!\n", myname);
++	
++	if(dict_plugin->function_update(dict_plugin->plugin_resource, key, value) < 0)
++		msg_fatal("%s: plugin update pair <%s:%s> failed!\n", myname, key, value);
++}
++
++static int dict_plugin_delete(struct DICT *dict, const char * key)
++{
++	const char* myname = "dict_plugin_delete";
++	int retcode = 0;
++	DICT_PLUGIN *dict_plugin = (DICT_PLUGIN *) dict;
++	if(!dict_plugin->function_delete)
++		msg_fatal("%s: plugin delete function is zero!\n", myname);
++	
++	retcode = dict_plugin->function_delete(dict_plugin->plugin_resource, key);
++	if(retcode < 0)
++		msg_fatal("%s: plugin delete key <%s> failed!\n", myname, key);
++
++	return (retcode == 1 ? 0 : 1);	
++}
++
++static int dict_plugin_sequence(struct DICT *dict, int i, const char ** key, const char **value)
++{
++	const char* myname = "dict_plugin_sequence";
++	DICT_PLUGIN *dict_plugin = (DICT_PLUGIN *) dict;
++	if(!dict_plugin->function_sequence)
++		msg_fatal("%s: plugin sequence function is zero!\n", myname);
++	
++	return dict_plugin->function_sequence(dict_plugin->plugin_resource, i, key, value);
++}
++
++static void dict_plugin_close(DICT *dict)
++{
++  DICT_PLUGIN *dict_plugin = (DICT_PLUGIN *) dict;
++  cfg_parser_free(dict_plugin->parser);
++  myfree(dict_plugin->plugin_name);
++  myfree(dict_plugin->plugin_fn_open);
++  myfree(dict_plugin->plugin_fn_open_arg);
++  myfree(dict_plugin->plugin_fn_close);
++  myfree(dict_plugin->plugin_fn_lookup);
++  myfree(dict_plugin->plugin_fn_update);
++  myfree(dict_plugin->plugin_fn_delete);
++  myfree(dict_plugin->plugin_fn_sequence);
++
++	if(dict_plugin->plugin_resource)
++  	dict_plugin->function_close(dict_plugin->plugin_resource);
++
++	if(dict_plugin->plugin)
++		dlclose(dict_plugin->plugin);
++
++  dict_free(dict);		
++}
++
++/* plugin_parse_config - parse plugin configuration file */
++
++static void plugin_parse_config(DICT_PLUGIN *dict_plugin, const char *plugincf)
++{
++  const char *myname = "plugin_name_parse";
++  CFG_PARSER *p;
++  
++  p = dict_plugin->parser = cfg_parser_alloc(plugincf);
++  dict_plugin->plugin_name = cfg_get_str(p, "plugin_name", "", 0, 0);
++  dict_plugin->plugin_fn_open = cfg_get_str(p, "open", "", 0, 0);
++  dict_plugin->plugin_fn_open_arg = cfg_get_str(p, "open_arg", "", 0, 0);
++  dict_plugin->plugin_fn_close = cfg_get_str(p, "close", "", 0, 0);
++  dict_plugin->plugin_fn_lookup = cfg_get_str(p, "lookup", "", 0, 0);
++  dict_plugin->plugin_fn_update = cfg_get_str(p, "update", "", 0, 0);
++  dict_plugin->plugin_fn_delete = cfg_get_str(p, "delete", "", 0, 0);
++  dict_plugin->plugin_fn_sequence = cfg_get_str(p, "sequence", "", 0, 0);
++}
++
++DICT *dict_plugin_open(const char *name, int unused_flags, int dict_flags)
++{
++	const char *myname = "dict_plugin_open";
++	
++  DICT_PLUGIN *dict_plugin;
++
++  dict_plugin = (DICT_PLUGIN *) dict_alloc(DICT_TYPE_PLUGIN, name,
++				   sizeof(DICT_PLUGIN));
++  plugin_parse_config(dict_plugin, name);
++  
++  if(!dict_plugin->plugin_name)
++  	msg_fatal("%s: couldn't intialize plugin: plugin name is null!\n", myname);
++  
++  if(!(dict_plugin->plugin = dlopen(dict_plugin->plugin_name, RTLD_LAZY)))
++		msg_fatal("%s: couldn't intialize plugin: <%s> dlopen <%s>!\n", myname, dict_plugin->plugin_name, dlerror());    
++
++	dict_plugin->function_open = 0;
++	dict_plugin->plugin_resource = 0;
++	if(dict_plugin->plugin_fn_open && *dict_plugin->plugin_fn_open)
++	{
++		dict_plugin->function_open = dlsym(dict_plugin->plugin, dict_plugin->plugin_fn_open);
++  	if(!dict_plugin->function_open)
++  		msg_fatal("%s: couldn't intialize plugin: <%s> dlsym <%s>!\n", myname, dict_plugin->plugin_fn_open, dlerror());
++		
++		if(!(dict_plugin->plugin_resource = dict_plugin->function_open(dict_plugin->plugin_fn_open_arg)))
++			msg_warn("%s: intialize plugin: open function alloc none resource!\n", myname, dict_plugin->plugin_fn_open);
++	}
++	
++	dict_plugin->function_close = 0;
++	if(dict_plugin->plugin_fn_close && *dict_plugin->plugin_fn_close)
++	{
++		dict_plugin->function_close = dlsym(dict_plugin->plugin, dict_plugin->plugin_fn_close);	
++  	if(!dict_plugin->function_close)
++  		msg_fatal("%s: couldn't intialize plugin: <%s> dlsym <%s>!\n", myname, dict_plugin->plugin_fn_close, dlerror());
++	}
++	
++	if(dict_plugin->plugin_resource && !dict_plugin->function_close)
++	  msg_fatal("%s: couldn't intialize plugin: <%s> should implement close interface for resource leak!!!\n", myname, dict_plugin->plugin_name); 
++  
++  dict_plugin->function_lookup = 0;
++  if(dict_plugin->plugin_fn_lookup && *dict_plugin->plugin_fn_lookup)
++  {
++  	dict_plugin->function_lookup = dlsym(dict_plugin->plugin, dict_plugin->plugin_fn_lookup);
++  	if(!dict_plugin->function_lookup)
++  		msg_fatal("%s: couldn't intialize plugin: <%s> dlsym <%s>!\n", myname, dict_plugin->plugin_fn_lookup, dlerror());
++  	
++  	dict_plugin->dict.lookup = dict_plugin_lookup;	
++  }
++
++	dict_plugin->function_update = 0;
++  if(dict_plugin->plugin_fn_update && *dict_plugin->plugin_fn_update)
++  {
++  	dict_plugin->function_update = dlsym(dict_plugin->plugin, dict_plugin->plugin_fn_update);
++  	if(!dict_plugin->function_update)
++  		msg_fatal("%s: couldn't intialize plugin: <%s> dlsym <%s>!\n", myname, dict_plugin->plugin_fn_update, dlerror());
++  
++  	dict_plugin->dict.update = dict_plugin_update;
++  }
++
++	dict_plugin->function_delete = 0;
++  if(dict_plugin->plugin_fn_delete && *dict_plugin->plugin_fn_delete)
++  {
++  	dict_plugin->function_delete = dlsym(dict_plugin->plugin, dict_plugin->plugin_fn_delete);
++  	if(!dict_plugin->function_delete)
++  		msg_fatal("%s: couldn't intialize plugin: <%s> dlsym <%s>!\n", myname, dict_plugin->plugin_fn_delete, dlerror());
++  
++  	dict_plugin->dict.delete = dict_plugin_delete;
++  }
++
++	dict_plugin->function_sequence = 0;
++  if(dict_plugin->plugin_fn_sequence && *dict_plugin->plugin_fn_sequence)
++  {
++  	dict_plugin->function_sequence = dlsym(dict_plugin->plugin, dict_plugin->plugin_fn_sequence);
++  	if(!dict_plugin->function_sequence)
++  		msg_fatal("%s: couldn't intialize plugin: <%s> dlsym <%s>!\n", myname, dict_plugin->plugin_fn_sequence, dlerror());
++  
++  	dict_plugin->dict.sequence = dict_plugin_sequence;
++  }
++  	
++  dict_plugin->dict.close = dict_plugin_close;
++	dict_plugin->dict.flags = dict_flags | DICT_FLAG_PATTERN;
++	
++  if (msg_verbose > 1)
++		msg_info("%s: plugin=%s, open=%s, close=%s, lookup=%s, update=%s, delete=%s, sequence=%s \n",
++						  myname, dict_plugin->plugin_name,
++						  dict_plugin->function_open ? "1" : "0", 
++						  dict_plugin->function_close ? "1" : "0", 
++						  dict_plugin->function_lookup ? "1" : "0", 
++						  dict_plugin->function_update ? "1" : "0", 
++						  dict_plugin->function_delete ? "1" : "0", 
++						  dict_plugin->function_sequence ? "1" : "0");    
++  return (DICT_DEBUG (&dict_plugin->dict));		
++}
+\ No newline at end of file
+diff -rupN postfix-2.7.2/src/global/dict_plugin.h postfix-2.7.2_with_dict_plugin/src/global/dict_plugin.h
+--- postfix-2.7.2/src/global/dict_plugin.h	1969-12-31 19:00:00.000000000 -0500
++++ postfix-2.7.2_with_dict_plugin/src/global/dict_plugin.h	2011-01-16 00:47:35.000000000 -0500
+@@ -0,0 +1,32 @@
++#ifndef _DICT_PLUGIN_INCLUDED_
++#define _DICT_PLUGIN_INCLUDED_
++
++/*++
++/* NAME
++/*	dict_plugin 3h
++/* SUMMARY
++/*	dictionary manager interface to so library
++/* SYNOPSIS
++/*	#include <dict_plugin.h>
++/* DESCRIPTION
++/* .nf
++
++ /*
++  * Utility library.
++  */
++#include <dict.h>
++
++ /*
++  * External interface.
++  */
++#define DICT_TYPE_PLUGIN "plugin"
++
++extern DICT *dict_plugin_open(const char *name, int unused_flags, int dict_flags);
++
++/* AUTHOR(S)
++/*	liu jianping
++/*	liujianping.china@gmail.com
++/*  Shanghai China
++/*--*/
++
++#endif
+\ No newline at end of file
+diff -rupN postfix-2.7.2/src/global/mail_dict.c postfix-2.7.2_with_dict_plugin/src/global/mail_dict.c
+--- postfix-2.7.2/src/global/mail_dict.c	2008-01-08 16:07:47.000000000 -0500
++++ postfix-2.7.2_with_dict_plugin/src/global/mail_dict.c	2011-01-16 00:42:08.000000000 -0500
+@@ -36,6 +36,7 @@
+ #include <dict_ldap.h>
+ #include <dict_mysql.h>
+ #include <dict_pgsql.h>
++#include <dict_plugin.h>
+ #include <mail_dict.h>
+ 
+ typedef struct {
+@@ -54,6 +55,7 @@ static const DICT_OPEN_INFO dict_open_in
+ #ifdef HAS_PGSQL
+     DICT_TYPE_PGSQL, dict_pgsql_open,
+ #endif
++		DICT_TYPE_PLUGIN, dict_plugin_open,
+     0,
+ };
+ 
+diff -rupN postfix-2.7.2/src/global/Makefile.in postfix-2.7.2_with_dict_plugin/src/global/Makefile.in
+--- postfix-2.7.2/src/global/Makefile.in	2009-10-06 20:09:52.000000000 -0400
++++ postfix-2.7.2_with_dict_plugin/src/global/Makefile.in	2011-01-16 00:41:17.000000000 -0500
+@@ -4,7 +4,7 @@ SRCS	= abounce.c anvil_clnt.c been_here.
+ 	clnt_stream.c conv_time.c db_common.c debug_peer.c debug_process.c \
+ 	defer.c deliver_completed.c deliver_flock.c deliver_pass.c \
+ 	deliver_request.c dict_ldap.c dict_mysql.c dict_pgsql.c \
+-	dict_proxy.c domain_list.c dot_lockfile.c dot_lockfile_as.c \
++	dict_proxy.c dict_plugin.c domain_list.c dot_lockfile.c dot_lockfile_as.c \
+ 	dsb_scan.c dsn.c dsn_buf.c dsn_mask.c dsn_print.c dsn_util.c \
+ 	ehlo_mask.c ext_prop.c file_id.c flush_clnt.c header_opts.c \
+ 	header_token.c input_transp.c int_filt.c is_header.c log_adhoc.c \
+@@ -35,7 +35,7 @@ OBJS	= abounce.o anvil_clnt.o been_here.
+ 	clnt_stream.o conv_time.o db_common.o debug_peer.o debug_process.o \
+ 	defer.o deliver_completed.o deliver_flock.o deliver_pass.o \
+ 	deliver_request.o dict_ldap.o dict_mysql.o dict_pgsql.o \
+-	dict_proxy.o domain_list.o dot_lockfile.o dot_lockfile_as.o \
++	dict_proxy.o dict_plugin.o domain_list.o dot_lockfile.o dot_lockfile_as.o \
+ 	dsb_scan.o dsn.o dsn_buf.o dsn_mask.o dsn_print.o dsn_util.o \
+ 	ehlo_mask.o ext_prop.o file_id.o flush_clnt.o header_opts.o \
+ 	header_token.o input_transp.o int_filt.o is_header.o log_adhoc.o \
+@@ -65,7 +65,7 @@ HDRS	= abounce.h anvil_clnt.h been_here.
+ 	canon_addr.h cfg_parser.h cleanup_user.h clnt_stream.h config.h \
+ 	conv_time.h db_common.h debug_peer.h debug_process.h defer.h \
+ 	deliver_completed.h deliver_flock.h deliver_pass.h deliver_request.h \
+-	dict_ldap.h dict_mysql.h dict_pgsql.h dict_proxy.h domain_list.h \
++	dict_ldap.h dict_mysql.h dict_pgsql.h dict_proxy.h dict_plugin.h domain_list.h \
+ 	dot_lockfile.h dot_lockfile_as.h dsb_scan.h dsn.h dsn_buf.h \
+ 	dsn_mask.h dsn_print.h dsn_util.h ehlo_mask.h ext_prop.h \
+ 	file_id.h flush_clnt.h header_opts.h header_token.h input_transp.h \
+@@ -868,6 +868,13 @@ dict_proxy.o: dict_proxy.c
+ dict_proxy.o: dict_proxy.h
+ dict_proxy.o: mail_params.h
+ dict_proxy.o: mail_proto.h
++dict_plugin.o: ../../include/sys_defs.h
++dict_plugin.o: ../../include/dict.h
++dict_plugin.o: ../../include/mymalloc.h
++dict_plugin.o: ../../include/msg.h
++dict_plugin.o: cfg_parser.h
++dict_plugin.o: dict_plugin.h
++dict_plugin.o: dict_plugin.c
+ domain_list.o: ../../include/match_list.h
+ domain_list.o: ../../include/match_ops.h
+ domain_list.o: ../../include/sys_defs.h

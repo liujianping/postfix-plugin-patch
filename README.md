@@ -62,69 +62,69 @@ and line 2 - 3, all are optional. But you should be attention, when you create a
 Plugin Map Program Guide:
 
 1. phototypes of the plugin interface
-	 1) open phototype:
-	 		definition:
-	 								void* (*open)(const char* arg);
-	 		description:
-						@Usage: create a resource obj of the plugin, will used by the other fuctions.
-						@Param: init_param, we can define something useful when create the resource. 
-										and the init_param will be readed from the plugin configure file, reference to [Plugin Configure Example: line 3]										 							
-	 					@Result: return the resoure object ptr, 
-	 									 Null, means create the resource object failed
-	 									 Not Null, means ok.
-	 					
-	 2) close phototype:
-	 		definition:
-	 								void (*close)(void* res);
-	 		description:
-						@Usage: destroy a resource obj
-						@Param: res, created by open fuction.
-
-	 3) lookup phototype:
-	 		definition:
-	 								const char* (*lookup)(void* res, const char* key);
-	 		description:
-						@Usage: lookup the value of the dest key
-						@Param: res, created by open fuction.
-										key, postfix provide the param when invoke the fuction
-						@Result:
-										value of the type const char*;
-										Null, means not find.
-										Not Null, finded.
-										
-	 4) update phototype:
-	 		definition:
-	 								int (*update)(void* res, const char* key, const char* value);
-	 		description:
-						@Usage: update the value of the dest key with the dest value
-						@Param: res, created by open fuction.
-										key, postfix provide the dest key when invoke the fuction
-										value, postfix provide the dest value when invoke the fuction
-						@Result:
-										-1, fuction failed
-										0, fuction succeed with no key update
-										1, fuction succeed with one key update
-	 		
-	 5) delete phototype:
-	 		definition:
-	 								void* (*delete)(void* res, const char* key);
-	 		description:
-						@Usage: delete the the dest key pair 
-						@Param: res, created by open fuction.
-										key, postfix provide the dest key when invoke the fuction
-						@Result:
-										-1, fuction failed
-										0, fuction succeed with no key deleted
-										1, fuction succeed with one key deleted
-
-	 6) sequence phototype:
-	 		definition:
-	 								void* (*sequence)(void* res, int i, const char ** key, const char **value);
-	 		description:
-	 					this interface just for the dict sequence interface, many inherit dict map doesnt support the function.
-	 					if you want to implement the interface, just make sure you know more detail enough. 
-	 					you can reference to the postfix/src/util/dict.h file.
-	 			
+	1) open phototype:
+	definition:
+	void* (*open)(const char* arg);
+	description:
+	@Usage: create a resource obj of the plugin, will used by the other fuctions.
+	@Param: init_param, we can define something useful when create the resource. 
+	and the init_param will be readed from the plugin configure file, reference to [Plugin Configure Example: line 3]										 							
+	@Result: return the resoure object ptr, 
+	  Null, means create the resource object failed
+	  Not Null, means ok.
+	
+	2) close phototype:
+	definition:
+	void (*close)(void* res);
+	description:
+	@Usage: destroy a resource obj
+	@Param: res, created by open fuction.
+	
+	3) lookup phototype:
+	definition:
+	const char* (*lookup)(void* res, const char* key);
+	description:
+	@Usage: lookup the value of the dest key
+	@Param: res, created by open fuction.
+	key, postfix provide the param when invoke the fuction
+	@Result:
+	value of the type const char*;
+	Null, means not find.
+	Not Null, finded.
+	
+	4) update phototype:
+	definition:
+	int (*update)(void* res, const char* key, const char* value);
+	description:
+	@Usage: update the value of the dest key with the dest value
+	@Param: res, created by open fuction.
+	key, postfix provide the dest key when invoke the fuction
+	value, postfix provide the dest value when invoke the fuction
+	@Result:
+	-1, fuction failed
+	0, fuction succeed with no key update
+	1, fuction succeed with one key update
+	
+	5) delete phototype:
+	definition:
+	void* (*delete)(void* res, const char* key);
+	description:
+	@Usage: delete the the dest key pair 
+	@Param: res, created by open fuction.
+	key, postfix provide the dest key when invoke the fuction
+	@Result:
+	-1, fuction failed
+	0, fuction succeed with no key deleted
+	1, fuction succeed with one key deleted
+	
+	6) sequence phototype:
+	definition:
+	void* (*sequence)(void* res, int i, const char ** key, const char **value);
+	description:
+	this interface just for the dict sequence interface, many inherit dict map doesnt support the function.
+	if you want to implement the interface, just make sure you know more detail enough. 
+	you can reference to the postfix/src/util/dict.h file.
+ 			
 	 
 2. implemetion your plugin.
 	 :)
@@ -132,7 +132,7 @@ Plugin Map Program Guide:
 Credits
 
     JianPing Liu
-    liujianping.china@gmail.com  
+    1151703234@qq.com  
     Shanghai, PRC 
     
     This project: 

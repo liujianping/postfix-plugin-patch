@@ -1,0 +1,193 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>Postfix-plugin-patch by liujianping</title>
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/pygment_trac.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+    <script src="javascripts/main.js"></script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+  </head>
+  <body>
+
+      <header>
+        <h1>Postfix-plugin-patch</h1>
+        <p>plugin patch for support the dict query</p>
+      </header>
+
+      <div id="banner">
+        <span id="logo"></span>
+
+        <a href="https://github.com/liujianping/postfix-plugin-patch" class="button fork"><strong>View On GitHub</strong></a>
+        <div class="downloads">
+          <span>Downloads:</span>
+          <ul>
+            <li><a href="https://github.com/liujianping/postfix-plugin-patch/zipball/master" class="button">ZIP</a></li>
+            <li><a href="https://github.com/liujianping/postfix-plugin-patch/tarball/master" class="button">TAR</a></li>
+          </ul>
+        </div>
+      </div><!-- end banner -->
+
+    <div class="wrapper">
+      <nav>
+        <ul></ul>
+      </nav>
+      <section>
+        <p>Postfix DICT Plugin Howto</p>
+
+<h2>
+<a name="based-on-postfix-272" class="anchor" href="#based-on-postfix-272"><span class="octicon octicon-link"></span></a>based on postfix 2.7.2</h2>
+
+<p>Introduction</p>
+
+<p>The Postfix plugin map type allows you to extend dict map type as you like,
+and do not patch the postfix source code any more, just implement the plugin interface.</p>
+
+<p>Building Postfix with Http support</p>
+
+<p>Get postfix source code from:
+    <a href="http://www.postfix.org/download.html">http://www.postfix.org/download.html</a></p>
+
+<pre><code>tar xfz postfix-2.x.x.tar.gz
+cd postfix-2.x.x
+patch -p1 -d ./ &lt; ../postfix-2.x.x_with_dict_plugin.patch
+</code></pre>
+
+<p>Then you can build Postfix from source code as described in the INSTALL document. </p>
+
+<p>Using Plugin map</p>
+
+<p>Once Postfix is built with http support, you can specify a map type in main.cf
+like this:</p>
+
+<pre><code>virtual_mailbox_maps = plugin:/etc/postfix/plugin_mailbox.cf
+</code></pre>
+
+<p>The file /etc/postfix/mailbox.cf specifies lots of information telling
+Postfix how to configure the plugin.</p>
+
+<p>Plugin Configure Example:</p>
+
+<pre><code>    @/etc/postfix/plugin_mailbox.cf
+    -------------------------------------------------------------------
+    1 plugin_name = /etc/postfix/plugins/libmailbox.so
+    2 open = name_of_init_fuction_in_plugin
+    3 open_arg = param_of_init_fuction_in_plugin
+    4 close = name_of_final_fuction_in_plugin
+    5 lookup = name_of_lookup_fuction_in_plugin
+    6 update = name_of_update_fuction_in_plugin
+    7 delete = name_of_delete_fuction_in_plugin
+    8 sequence = name_of_sequence_fuction_in_plugin
+</code></pre>
+
+<p>line 1: tell the postfix where to dlopen the plugin, 
+                of course you can just set the plugin name without absolute path, 
+                you should make sure the plugin in the ld.conf path where dlopen can find</p>
+
+<p>line 2: name of the plugin to initialize some resource, the item is option
+line 3: argument string of the plugin to initialize fuction, the item is option
+line 4: name of the plugin to finalize the resource we initialized, the item should be with the initialize option,
+                otherwise there may be memory leak problem.</p>
+
+<p>line 5: name of the plugin fuction to lookup a key 
+line 6: name of the plugin fuction to update a key 
+line 7: name of the plugin fuction to delete a key 
+line 8: name of the plugin fuction to sequence  pair </p>
+
+<p>if line 5 - 8, some or all items not defined, plugin will use the default dict method(which implemention is not support).
+and line 2 - 3, all are optional. But you should be attention, when you create a resource, you should release it.</p>
+
+<p>Plugin Map Program Guide:</p>
+
+<ol>
+<li>
+<p>phototypes of the plugin interface
+1) open phototype:
+definition:
+void* (*open)(const char* arg);
+description:
+<a href="https://github.com/Usage" class="user-mention">@Usage</a>: create a resource obj of the plugin, will used by the other fuctions.
+<a href="https://github.com/Param" class="user-mention">@Param</a>: init_param, we can define something useful when create the resource. 
+and the init_param will be readed from the plugin configure file, reference to [Plugin Configure Example: line 3]<br>
+<a href="https://github.com/Result" class="user-mention">@Result</a>: return the resoure object ptr, 
+  Null, means create the resource object failed
+  Not Null, means ok.</p>
+
+<p>2) close phototype:
+definition:
+void (*close)(void* res);
+description:
+<a href="https://github.com/Usage" class="user-mention">@Usage</a>: destroy a resource obj
+<a href="https://github.com/Param" class="user-mention">@Param</a>: res, created by open fuction.</p>
+
+<p>3) lookup phototype:
+definition:
+const char* (*lookup)(void* res, const char* key);
+description:
+<a href="https://github.com/Usage" class="user-mention">@Usage</a>: lookup the value of the dest key
+<a href="https://github.com/Param" class="user-mention">@Param</a>: res, created by open fuction.
+key, postfix provide the param when invoke the fuction
+<a href="https://github.com/Result" class="user-mention">@Result</a>:
+value of the type const char*;
+Null, means not find.
+Not Null, finded.</p>
+
+<p>4) update phototype:
+definition:
+int (*update)(void* res, const char* key, const char* value);
+description:
+<a href="https://github.com/Usage" class="user-mention">@Usage</a>: update the value of the dest key with the dest value
+<a href="https://github.com/Param" class="user-mention">@Param</a>: res, created by open fuction.
+key, postfix provide the dest key when invoke the fuction
+value, postfix provide the dest value when invoke the fuction
+@Result:
+-1, fuction failed
+0, fuction succeed with no key update
+1, fuction succeed with one key update</p>
+
+<p>5) delete phototype:
+definition:
+void* (*delete)(void* res, const char* key);
+description:
+@Usage: delete the the dest key pair 
+@Param: res, created by open fuction.
+key, postfix provide the dest key when invoke the fuction
+@Result:
+-1, fuction failed
+0, fuction succeed with no key deleted
+1, fuction succeed with one key deleted</p>
+
+<p>6) sequence phototype:
+definition:
+void* (*sequence)(void* res, int i, const char ** key, const char **value);
+description:
+this interface just for the dict sequence interface, many inherit dict map doesnt support the function.
+if you want to implement the interface, just make sure you know more detail enough. 
+you can reference to the postfix/src/util/dict.h file.</p>
+</li>
+<li><p>implemetion your plugin.
+ :)</p></li>
+</ol><p>Credits</p>
+
+<pre><code>JianPing Liu
+1151703234@qq.com  
+Shanghai, PRC 
+
+This project: 
+</code></pre>
+      </section>
+      <footer>
+        <p>Project maintained by <a href="https://github.com/liujianping">liujianping</a></p>
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://twitter.com/michigangraham">mattgraham</a></small></p>
+      </footer>
+    </div>
+    <!--[if !IE]><script>fixScale(document);</script><![endif]-->
+    
+  </body>
+</html>
